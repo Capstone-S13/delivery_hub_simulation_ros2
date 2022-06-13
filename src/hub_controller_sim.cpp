@@ -6,6 +6,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include <std_msgs/msg/string.hpp>
+#include "std_msgs/msg/float64_multi_array.hpp"
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -16,12 +17,14 @@ class HubControllerSim : public rclcpp::Node
 {
 public:
 	HubControllerSim()
-	: Node("hub_controller_sim")
+	: Node("hub_controller_sim") : pose_state({0.0, 0.0, 0.0})
 	{
 		cmd_sub = this->create_subscription<geometry_msgs::msg::Twist>(
 			"cmd", 10, std::bind(&HubControllerSim::cmd_callback, this, std::placeholders::_1));
 		stop_sub = this->create_subscription<std_msgs::msg::String>(
 			"stop", 10, std::bind(&HubControllerSim::stop_callback, this, std::placeholders::_1));
+    vel_pub = this->create_subscription<<std_msgs::msg::Float64MultiArray>(
+      "/velocity_controller/commands");
 	}
 
 	static std::shared_ptr<HubControllerSim> make(std::vector<std::string> joint_names)
@@ -41,7 +44,6 @@ public:
 			return nullptr;
 		}
 		hub_controller_sim_ptr->set_action_client(action_client);
-		hub_controller_sim_ptr->init_pos();
 		return hub_controller_sim_ptr;
 	}
 
@@ -50,6 +52,7 @@ private:
 	rclcpp_action::Client<control_msgs::action::FollowJointTrajectory>::SharedPtr action_client_ptr;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub;
 	rclcpp::Subscription<std_msgs::msg::String>::SharedPtr stop_sub;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr vel_pub;
 
 	void cmd_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
 	{
@@ -123,6 +126,13 @@ private:
 	void stop_callback(const std_msgs::msg::String::SharedPtr msg)
 	{
 		//set speed to zero
+    if (msg->data == "stop")
+    {
+      std_msgs::msg::Float64MultiArray stop_msg;
+      stop_msg.data.push_back(0)
+      vel_pub->publish()
+    }
+
 	}
 
 	void set_action_client(rclcpp_action::Client<control_msgs::action::FollowJointTrajectory>::SharedPtr _action_client)
@@ -132,12 +142,14 @@ private:
 
   int move_to(const float x, const float y, float z)
 	{
-				// create goal
+		// create goal
 		std::vector<trajectory_msgs::msg::JointTrajectoryPoint> points;
 		trajectory_msgs::msg::JointTrajectoryPoint point;
+    point.time_from_start = rclcpp::Duration::from_seconds(2.0);
 		point.positions.resize(joint_names.size());
 		point.positions[0] = x;
 		point.positions[1] = z;
+    points.push_back(point);
 
 		// goal options
 		rclcpp_action::Client<control_msgs::action::FollowJointTrajectory>::SendGoalOptions opt;
@@ -147,37 +159,45 @@ private:
 
 		// send  goal
   	control_msgs::action::FollowJointTrajectory_Goal goal_msg;
-  	goal_msg.goal_time_tolerance = rclcpp::Duration::from_seconds(1.0);
+  	goal_msg.goal_time_tolerance = rclcpp::Duration::from_seconds(5.0);
   	goal_msg.trajectory.joint_names = joint_names;
   	goal_msg.trajectory.points = points;
 
     auto goal_handle_future = action_client_ptr->async_send_goal(goal_msg, opt);
-    if (rclcpp::spin_until_future_complete(shared_from_this(), goal_handle_future) !=
-      rclcpp::FutureReturnCode::SUCCESS)
-    {
-      RCLCPP_ERROR(this->get_logger(), "send goal call failed :(");
-      return 1;
-    }
-    RCLCPP_INFO(this->get_logger(), "send goal call ok :)");
 
-    rclcpp_action::ClientGoalHandle<control_msgs::action::FollowJointTrajectory>::SharedPtr
-      goal_handle = goal_handle_future.get();
-    if (!goal_handle) {
-      RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
-      return 1;
-    }
-    RCLCPP_INFO(this->get_logger(), "Goal was accepted by server");
+    // TODO:
+    // -  Find out how to safely call an action within a callback function,
+    // or perhaps the "best practice" method to achieve the same functionality
+    // -  Find out how to call spin within node.
 
-    // Wait for the server to be done with the goal
-    auto result_future = action_client_ptr->async_get_result(goal_handle);
-    RCLCPP_INFO(this->get_logger(), "Waiting for result");
-    if (rclcpp::spin_until_future_complete(shared_from_this(), result_future) !=
-      rclcpp::FutureReturnCode::SUCCESS)
-    {
-      RCLCPP_ERROR(this->get_logger(), "get result call failed :(");
-      return 1;
-    }
+    // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(),
+    //   goal_handle_future) !=
+    //   rclcpp::FutureReturnCode::SUCCESS)
+    // {
+    //   RCLCPP_ERROR(this->get_logger(), "send goal call failed :(");
+    //   return 1;
+    // }
+    // RCLCPP_INFO(this->get_logger(), "send goal call ok :)");
 
+    // rclcpp_action::ClientGoalHandle<control_msgs::action::FollowJointTrajectory>::SharedPtr
+    //   goal_handle = goal_handle_future.get();
+    // if (!goal_handle) {
+    //   RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
+    //   return 1;
+    // }
+    // RCLCPP_INFO(this->get_logger(), "Goal was accepted by server");
+
+    // // Wait for the server to be done with the goal
+    // auto result_future = action_client_ptr->async_get_result(goal_handle);
+    // RCLCPP_INFO(this->get_logger(), "Waiting for result");
+    // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(),
+    //   result_future) !=
+    //   rclcpp::FutureReturnCode::SUCCESS)
+    // {
+    //   RCLCPP_ERROR(this->get_logger(), "get result call failed :(");
+    //   return 1;
+    // }
+    return 1;
 	}
 	// Sets position to zero for both joints.
 	void init_pos()
